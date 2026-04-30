@@ -7,7 +7,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     student_data = {
         'name':       'Валентина',
         'email':      'vgrekova21@gmail.com',
-        'specialty':  'Комп'ютерна інженерія',
+        'specialty':  'Computer Engineering',
         'skills':     ['Python', 'Azure', 'GitHub'],
         'labs_done':  2,
         'platform':   'Azure Static Web Apps (PaaS)',
