@@ -1,5 +1,6 @@
 # api/feedback/__init__.py
-# Azure Function — приймає відгук, аналізує тональність, зберігає у Cosmos DB
+# Azure Function — приймає відгук, аналізує тональність,
+# зберігає у Cosmos DB та надсилає alert у Logic Apps
 
 import azure.functions as func
 import json, os, uuid
@@ -25,13 +26,15 @@ def get_cosmos_container():
     return db.get_container_client(os.getenv('COSMOS_CONTAINER'))
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
+
     # ── Читаємо тіло запиту ─────────────────────────────────────────
     try:
         body = req.get_json()
     except ValueError:
         return func.HttpResponse(
             json.dumps({'error': 'Invalid JSON body'}),
-            status_code=400, mimetype='application/json'
+            status_code=400,
+            mimetype='application/json'
         )
 
     text   = body.get('text', '').strip()
@@ -41,27 +44,32 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     if not text:
         return func.HttpResponse(
             json.dumps({'error': 'text is required'}),
-            status_code=400, mimetype='application/json'
+            status_code=400,
+            mimetype='application/json'
         )
 
     # ── Azure AI Language: аналіз тональності ───────────────────────
-    ai_client  = get_ai_client()
+    ai_client = get_ai_client()
+
     sentiments = ai_client.analyze_sentiment([text])
     key_phrases_result = ai_client.extract_key_phrases([text])
 
     sentiment_doc = sentiments[0]
-    sentiment     = sentiment_doc.sentiment          # positive/neutral/negative
-    confidence    = {
+
+    sentiment = sentiment_doc.sentiment
+
+    confidence = {
         'positive': round(sentiment_doc.confidence_scores.positive, 3),
-        'neutral' : round(sentiment_doc.confidence_scores.neutral,  3),
+        'neutral' : round(sentiment_doc.confidence_scores.neutral, 3),
         'negative': round(sentiment_doc.confidence_scores.negative, 3),
     }
+
     key_phrases = list(key_phrases_result[0].key_phrases)
 
     # ── Формуємо документ для Cosmos DB ─────────────────────────────
     document = {
         'id'         : str(uuid.uuid4()),
-        'course'     : course,           # partition key
+        'course'     : course,
         'author'     : author,
         'text'       : text,
         'sentiment'  : sentiment,
@@ -70,30 +78,38 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         'created_at' : datetime.utcnow().isoformat() + 'Z',
     }
 
-    # ── Зберігаємо у Cosmos DB ───────────────────────────────────────
+    # ── Зберігаємо у Cosmos DB ──────────────────────────────────────
     container = get_cosmos_container()
     container.upsert_item(document)
-    # ── Якщо негативний — сповістити Logic Apps ──────────────────────────
-LOGIC_APP_URL = os.getenv('LOGIC_APP_WEBHOOK_URL', '')
 
-if sentiment == 'negative' and LOGIC_APP_URL:
-    alert_payload = {
-        'feedback_id'         : document['id'],
-        'course'              : course,
-        'author'              : author,
-        'text'                : text,
-        'sentiment'           : sentiment,
-        'confidence_negative' : confidence['negative'],
-        'key_phrases'         : key_phrases,
-    }
-    try:
-        requests.post(LOGIC_APP_URL, json=alert_payload, timeout=5)
-    except Exception as e:
-        print(f'Logic Apps alert failed: {e}')
+    # ── Якщо негативний — сповістити Logic Apps ─────────────────────
+    LOGIC_APP_URL = os.getenv('LOGIC_APP_WEBHOOK_URL', '')
 
-    # ── Відповідь клієнту ────────────────────────────────────────────
+    if sentiment == 'negative' and LOGIC_APP_URL:
+
+        alert_payload = {
+            'feedback_id'         : document['id'],
+            'course'              : course,
+            'author'              : author,
+            'text'                : text,
+            'sentiment'           : sentiment,
+            'confidence_negative' : confidence['negative'],
+            'key_phrases'         : key_phrases,
+        }
+
+        try:
+            requests.post(
+                LOGIC_APP_URL,
+                json=alert_payload,
+                timeout=5
+            )
+
+        except Exception as e:
+            print(f'Logic Apps alert failed: {e}')
+
+    # ── Відповідь клієнту ───────────────────────────────────────────
     return func.HttpResponse(
-        body    = json.dumps(document, ensure_ascii=False, indent=2),
-        mimetype= 'application/json',
-        headers = {'Access-Control-Allow-Origin': '*'}
+        body=json.dumps(document, ensure_ascii=False, indent=2),
+        mimetype='application/json',
+        headers={'Access-Control-Allow-Origin': '*'}
     )
