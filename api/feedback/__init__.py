@@ -3,6 +3,7 @@
 
 import azure.functions as func
 import json, os, uuid
+import requests
 from datetime import datetime
 from dotenv import load_dotenv
 from azure.ai.textanalytics import TextAnalyticsClient
@@ -72,6 +73,23 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     # ── Зберігаємо у Cosmos DB ───────────────────────────────────────
     container = get_cosmos_container()
     container.upsert_item(document)
+    # ── Якщо негативний — сповістити Logic Apps ──────────────────────────
+LOGIC_APP_URL = os.getenv('LOGIC_APP_WEBHOOK_URL', '')
+
+if sentiment == 'negative' and LOGIC_APP_URL:
+    alert_payload = {
+        'feedback_id'         : document['id'],
+        'course'              : course,
+        'author'              : author,
+        'text'                : text,
+        'sentiment'           : sentiment,
+        'confidence_negative' : confidence['negative'],
+        'key_phrases'         : key_phrases,
+    }
+    try:
+        requests.post(LOGIC_APP_URL, json=alert_payload, timeout=5)
+    except Exception as e:
+        print(f'Logic Apps alert failed: {e}')
 
     # ── Відповідь клієнту ────────────────────────────────────────────
     return func.HttpResponse(
